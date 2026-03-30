@@ -144,3 +144,23 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+@dp.message(F.text == "💎 VIP / Тарифи")
+async def vip_btn(message: Message):
+    await message.answer(
+        "<b>💎 VIP / Тарифи</b>\n\n"
+        "FREE\n"
+        "INTEL\n"
+        "AGENCY\n"
+        "WARROOM",
+        reply_markup=kb()
+    )
+
+@dp.message(F.text == "⚙️ Налаштування")
+async def settings_btn(message: Message):
+    await message.answer(
+        "<b>⚙️ Налаштування</b>\n\n"
+        "Меню відновлено. Базові параметри активні.",
+        reply_markup=kb()
+    )
