@@ -7,7 +7,7 @@ from aiogram.types import Message
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=os.getenv('BOT_TOKEN'))
 dp = Dispatcher()
 
 @dp.message()
