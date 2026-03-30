@@ -55,12 +55,12 @@ def save_res(uid, q, res):
 
 # --- OSINT MODULES ---
 async def run_maigret(target):
-    process = await asyncio.create_subprocess_exec("python3", "-m", "maigret", target, "--timeout", "30", "--top-sites", "500", "--no-color", stdout=asyncio.subprocess.PIPE)
+    process = await asyncio.create_subprocess_exec("python3", "-m", "maigret", target, "--timeout", "12", "--top-sites", "50", "--no-color", stdout=asyncio.subprocess.PIPE)
     stdout, _ = await process.communicate()
     return [l.split()[-1] for l in stdout.decode().splitlines() if "http" in l and "[+]" in l]
 
 async def run_sherlock(target):
-    process = await asyncio.create_subprocess_exec("sherlock", target, "--timeout", "20", "--no-color", stdout=asyncio.subprocess.PIPE)
+    process = await asyncio.create_subprocess_exec("sherlock", target, "--timeout", "10", "--no-color", stdout=asyncio.subprocess.PIPE)
     stdout, _ = await process.communicate()
     return [l.split()[-1] for l in stdout.decode().splitlines() if "http" in l]
 
