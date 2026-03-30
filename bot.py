@@ -334,7 +334,7 @@ def summarize_domain(result: dict) -> list[str]:
         if rdap.get("ldhName"):
             lines.append(f"RDAP name: {rdap.get('ldhName')}")
 vt = result.get("virustotal", {}).get("data", {})
-    attrs = (vt.get("data") or {}).get("attributes", {}) if isinstance(vt, dict) else {}
+attrs = (vt.get("data") or {}).get("attributes", {}) if isinstance(vt, dict) else {}
     stats = attrs.get("last_analysis_stats", {}) if isinstance(attrs, dict) else {}
     if stats:
         lines.append(f"VT malicious: {stats.get('malicious', 0)} | suspicious: {stats.get('suspicious', 0)}")
