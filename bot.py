@@ -1,26 +1,28 @@
 import asyncio
 import logging
 import os
-
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN not set")
-
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 @dp.message()
 async def echo(message: Message):
-    text = message.text or ""
-    await message.answer(f"✅ Nexara online\n\n{text}")
+    await message.answer(f"✅ Nexara online\n\n{message.text or ''}")
 
 async def main():
-    bot = Bot(token=BOT_TOKEN)
+    if not BOT_TOKEN:
+        logging.error("BOT_TOKEN IS MISSING! Use: fly secrets set BOT_TOKEN='your_token'")
+        return
+    logging.info("Starting bot...")
     await dp.start_polling(bot)
 
-if name == "main":
-    asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
