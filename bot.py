@@ -1,22 +1,18 @@
-import os
 import asyncio
-import logging
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
+from aiogram.types import Message
+import os
 
-logging.basicConfig(level=logging.INFO)
+TOKEN = os.getenv("BOT_TOKEN")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN not set")
-
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 @dp.message()
-async def echo(message: types.Message):
-    await message.answer("✅ Nexara працює")
+async def echo(message: Message):
+    await message.answer(message.text)
 
 async def main():
-    bot = Bot(token=BOT_TOKEN)
     await dp.start_polling(bot)
 
 if name == "main":
