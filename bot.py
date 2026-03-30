@@ -102,6 +102,7 @@ async def venice_ai(data):
 def get_vt_stats(vt_data):
     if not vt_data or not isinstance(vt_data, dict): return "Немає даних VT"
     try:
+        # Line 337: Fixed Indentation
         attrs = vt_data.get("data", {}).get("attributes", {})
         stats = attrs.get("last_analysis_stats", {})
         if not stats: return "VT: Дані відсутні"
