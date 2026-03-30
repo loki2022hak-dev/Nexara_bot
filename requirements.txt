@@ -1,2 +1,5 @@
 aiogram==3.4.1
 aiohttp==3.9.3
+reportlab==4.1.0
+maigret==0.5.0
+sherlock-project==0.15.0
