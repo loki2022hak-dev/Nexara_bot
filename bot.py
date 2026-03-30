@@ -86,7 +86,8 @@ def keyboard():
 async def fetch(session, url, headers=None):
     try:
         async with session.get(url, headers=headers or {}, timeout=20) as r:
-            return r.status < 400, await r.json() if "json" in r.headers.get("Content-Type", "") else await r.text()
+            content_type = r.headers.get("Content-Type", "").lower()
+            return r.status < 400, await r.json() if "json" in content_type else await r.text()
     except: return False, None
 
 async def venice_ai(data):
@@ -101,7 +102,9 @@ async def venice_ai(data):
 def get_vt_stats(vt_data):
     if not vt_data or not isinstance(vt_data, dict): return "Немає даних VT"
     try:
-        stats = vt_data.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+        attrs = vt_data.get("data", {}).get("attributes", {})
+        stats = attrs.get("last_analysis_stats", {})
+        if not stats: return "VT: Дані відсутні"
         return f"VT: Malicious({stats.get('malicious', 0)}) Suspicious({stats.get('suspicious', 0)})"
     except: return "VT error"
 
