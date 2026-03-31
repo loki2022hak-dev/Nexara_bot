@@ -1,3 +1,4 @@
+from osint_username import run_maigret
 import os
 import json
 import html
@@ -406,7 +407,7 @@ async def universal_handler(message: Message):
         return
 
     wait = await message.answer("NEXARA: Глибокий пошук...", reply_markup=menu(message.from_user.id))
-    result = await run_analysis(text)
+    result = await run_maigret(text)
 
     save_search(message.from_user.id, text, result["type"], result)
 
