@@ -196,13 +196,65 @@ def bump_daily(user_id: int):
     c.commit()
     c.close()
 
-def menu():
+def reset_all_daily_limits():
+    c = conn()
+    cur = c.cursor()
+    cur.execute("DELETE FROM daily_usage")
+    c.commit()
+    c.close()
+
+def owner_stats():
+    c = conn()
+    cur = c.cursor()
+    cur.execute("SELECT COUNT(*) AS cnt FROM users")
+    users = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches")
+    searches = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE query_type = 'username'")
+    usernames = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE query_type = 'domain'")
+    domains = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE query_type = 'ip'")
+    ips = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE query_type = 'email'")
+    emails = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE query_type = 'phone'")
+    phones = int(cur.fetchone()["cnt"])
+    cur.execute("SELECT COUNT(*) AS cnt FROM searches WHERE created_at LIKE ?", (datetime.utcnow().strftime("%Y-%m-%d") + "%",))
+    today = int(cur.fetchone()["cnt"])
+    c.close()
+    return {
+        "users": users,
+        "searches": searches,
+        "today": today,
+        "username": usernames,
+        "domain": domains,
+        "ip": ips,
+        "email": emails,
+        "phone": phones,
+    }
+
+def secrets_status():
+    return {
+        "BOT_TOKEN": bool(BOT_TOKEN),
+        "OWNER_ID": bool(OWNER_ID),
+        "SHODAN_API_KEY": bool(SHODAN_API_KEY),
+        "HIBP_API_KEY": bool(HIBP_API_KEY),
+    }
+
+def owner_row():
+    return [KeyboardButton(text="🛡 Адмін")] if OWNER_ID else []
+
+def menu(user_id: int | None = None):
+    keyboard = [
+        [KeyboardButton(text="🔎 Новий пошук"), KeyboardButton(text="📁 Мої результати")],
+        [KeyboardButton(text="💎 VIP / Тарифи"), KeyboardButton(text="👤 Профіль")],
+        [KeyboardButton(text="📄 PDF досьє"), KeyboardButton(text="🆘 Підтримка")],
+    ]
+    if user_id == OWNER_ID and OWNER_ID:
+        keyboard.append([KeyboardButton(text="🛡 Адмін")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🔎 Новий пошук"), KeyboardButton(text="📁 Мої результати")],
-            [KeyboardButton(text="💎 VIP / Тарифи"), KeyboardButton(text="👤 Профіль")],
-            [KeyboardButton(text="📄 PDF досьє"), KeyboardButton(text="🆘 Підтримка")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True
     )
 
@@ -660,7 +712,7 @@ async def start_cmd(message: Message):
         "<b>NEXARA</b>\n"
         f"Використано: {used}\n\n"
         "Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:",
-        reply_markup=menu()
+        reply_markup=menu(message.from_user.id)
     )
 
 @dp.message(Command("profile"))
@@ -674,7 +726,7 @@ async def profile_cmd(message: Message):
         f"<b>Username:</b> @{esc(message.from_user.username or 'none')}\n"
         f"<b>Використано сьогодні:</b> {used_str}\n"
         f"<b>Всього пошуків:</b> {total}",
-        reply_markup=menu()
+        reply_markup=menu(message.from_user.id)
     )
 
 @dp.message(F.text == "👤 Профіль")
@@ -684,18 +736,18 @@ async def profile_btn(message: Message):
 @dp.message(F.text == "🔎 Новий пошук")
 async def new_search_btn(message: Message):
     WAITING_FOR_QUERY[message.from_user.id] = True
-    await message.answer("Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:", reply_markup=menu())
+    await message.answer("Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:", reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "📁 Мої результати")
 async def results_btn(message: Message):
     rows = get_history(message.from_user.id, 10)
     if not rows:
-        await message.answer("Немає даних.", reply_markup=menu())
+        await message.answer("Немає даних.", reply_markup=menu(message.from_user.id))
         return
     out = ["<b>Мої результати</b>", ""]
     for r in rows:
         out.append(f"• <code>{esc(r['query'])}</code> [{esc(r['query_type'])}] — {esc(r['created_at'])}")
-    await message.answer("\n".join(out), reply_markup=menu())
+    await message.answer("\n".join(out), reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "📄 PDF досьє")
 async def pdf_btn(message: Message):
@@ -709,20 +761,95 @@ async def pdf_btn(message: Message):
         await message.answer_document(FSInputFile(row["pdf_path"]), caption="PDF досьє")
         return
 
-    await message.answer("Немає PDF досьє.", reply_markup=menu())
+    await message.answer("Немає PDF досьє.", reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "💎 VIP / Тарифи")
 async def vip_btn(message: Message):
     await message.answer(
         "<b>VIP / Тарифи</b>\n\nFREE\nINTEL\nAGENCY\nWARROOM",
-        reply_markup=menu()
+        reply_markup=menu(message.from_user.id)
     )
 
 @dp.message(F.text == "🆘 Підтримка")
 async def support_btn(message: Message):
     await message.answer(
         "Підтримка активна. Надішли проблему одним повідомленням.",
-        reply_markup=menu()
+        reply_markup=menu(message.from_user.id)
+    )
+
+
+@dp.message(F.text == "🛡 Адмін")
+async def admin_btn(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    await message.answer(
+        "<b>Адмін-панель</b>\n\n"
+        "Команди:\n"
+        "• 📊 Статистика\n"
+        "• ♻️ Скинути ліміти\n"
+        "• 🧪 Health\n"
+        "• 🔐 Secrets status",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="♻️ Скинути ліміти")],
+                [KeyboardButton(text="🧪 Health"), KeyboardButton(text="🔐 Secrets status")],
+                [KeyboardButton(text="🔎 Новий пошук")]
+            ],
+            resize_keyboard=True
+        )
+    )
+
+@dp.message(F.text == "📊 Статистика")
+async def admin_stats_btn(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    st = owner_stats()
+    await message.answer(
+        "<b>Статистика</b>\n\n"
+        f"Users: {st['users']}\n"
+        f"Searches total: {st['searches']}\n"
+        f"Searches today: {st['today']}\n"
+        f"Username: {st['username']}\n"
+        f"Domain: {st['domain']}\n"
+        f"IP: {st['ip']}\n"
+        f"Email: {st['email']}\n"
+        f"Phone: {st['phone']}",
+        reply_markup=menu(message.from_user.id)
+    )
+
+@dp.message(F.text == "♻️ Скинути ліміти")
+async def admin_reset_limits_btn(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    reset_all_daily_limits()
+    await message.answer("Ліміти скинуто.", reply_markup=menu(message.from_user.id))
+
+@dp.message(F.text == "🧪 Health")
+async def admin_health_btn(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    await message.answer(
+        "<b>Health</b>\n\n"
+        f"Bot: online\n"
+        f"DB: {esc(DB_PATH)}\n"
+        f"Dossier dir exists: {DOSSIER_DIR.exists()}\n"
+        f"Owner bypass: {'on' if OWNER_ID else 'off'}\n"
+        f"Daily limit: {FREE_DAILY_LIMIT}",
+        reply_markup=menu(message.from_user.id)
+    )
+
+@dp.message(F.text == "🔐 Secrets status")
+async def admin_secrets_btn(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    st = secrets_status()
+    await message.answer(
+        "<b>Secrets status</b>\n\n"
+        f"BOT_TOKEN: {'set' if st['BOT_TOKEN'] else 'missing'}\n"
+        f"OWNER_ID: {'set' if st['OWNER_ID'] else 'missing'}\n"
+        f"SHODAN_API_KEY: {'set' if st['SHODAN_API_KEY'] else 'missing'}\n"
+        f"HIBP_API_KEY: {'set' if st['HIBP_API_KEY'] else 'missing'}",
+        reply_markup=menu(message.from_user.id)
     )
 
 @dp.message(F.text)
@@ -732,7 +859,7 @@ async def universal_handler(message: Message):
         return
 
     if text.startswith("/") and text not in ["/start", "/profile"]:
-        await message.answer("Невідома команда.", reply_markup=menu())
+        await message.answer("Невідома команда.", reply_markup=menu(message.from_user.id))
         return
 
     if text in {"🔎 Новий пошук", "📁 Мої результати", "📄 PDF досьє", "👤 Профіль", "💎 VIP / Тарифи", "🆘 Підтримка"}:
@@ -742,10 +869,10 @@ async def universal_handler(message: Message):
 
     used = daily_used(message.from_user.id)
     if message.from_user.id != OWNER_ID and used >= FREE_DAILY_LIMIT:
-        await message.answer(f"Ліміт вичерпано: {used}/{FREE_DAILY_LIMIT}", reply_markup=menu())
+        await message.answer(f"Ліміт вичерпано: {used}/{FREE_DAILY_LIMIT}", reply_markup=menu(message.from_user.id))
         return
 
-    wait = await message.answer("NEXARA: Глибокий пошук...", reply_markup=menu())
+    wait = await message.answer("NEXARA: Глибокий пошук...", reply_markup=menu(message.from_user.id))
     try:
         result = await full_osint(text)
         pdf_path = make_pdf(result)
@@ -754,14 +881,14 @@ async def universal_handler(message: Message):
         if message.from_user.id != OWNER_ID:
             bump_daily(message.from_user.id)
 
-        await wait.edit_text(render_result(result), reply_markup=menu())
+        await wait.edit_text(render_result(result), reply_markup=menu(message.from_user.id))
 
         if pdf_path and os.path.exists(pdf_path):
             await message.answer_document(FSInputFile(pdf_path), caption="PDF досьє")
 
     except Exception as e:
         logging.exception("search failed")
-        await wait.edit_text(f"Помилка: <code>{esc(str(e))}</code>", reply_markup=menu())
+        await wait.edit_text(f"Помилка: <code>{esc(str(e))}</code>", reply_markup=menu(message.from_user.id))
 
 async def main():
     init_db()
