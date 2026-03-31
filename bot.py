@@ -1,3 +1,4 @@
+from osint_core import full_search
 import os
 import re
 import json
@@ -708,7 +709,9 @@ async def start_cmd(message: Message):
     upsert_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     WAITING_FOR_QUERY[message.from_user.id] = True
     used = "∞" if message.from_user.id == OWNER_ID else str(daily_used(message.from_user.id))
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>NEXARA</b>\n"
         f"Використано: {used}\n\n"
         "Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:",
@@ -720,7 +723,9 @@ async def profile_cmd(message: Message):
     used = daily_used(message.from_user.id)
     total = total_searches(message.from_user.id)
     used_str = "∞" if message.from_user.id == OWNER_ID else f"{used}/{FREE_DAILY_LIMIT}"
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         f"<b>Профіль</b>\n\n"
         f"<b>ID:</b> <code>{message.from_user.id}</code>\n"
         f"<b>Username:</b> @{esc(message.from_user.username or 'none')}\n"
@@ -736,18 +741,24 @@ async def profile_btn(message: Message):
 @dp.message(F.text == "🔎 Новий пошук")
 async def new_search_btn(message: Message):
     WAITING_FOR_QUERY[message.from_user.id] = True
-    await message.answer("Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:", reply_markup=menu(message.from_user.id))
+    result = await full_search(message.text)
+    await message.answer(result)
+#"Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:", reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "📁 Мої результати")
 async def results_btn(message: Message):
     rows = get_history(message.from_user.id, 10)
     if not rows:
-        await message.answer("Немає даних.", reply_markup=menu(message.from_user.id))
+        result = await full_search(message.text)
+    await message.answer(result)
+#"Немає даних.", reply_markup=menu(message.from_user.id))
         return
     out = ["<b>Мої результати</b>", ""]
     for r in rows:
         out.append(f"• <code>{esc(r['query'])}</code> [{esc(r['query_type'])}] — {esc(r['created_at'])}")
-    await message.answer("\n".join(out), reply_markup=menu(message.from_user.id))
+    result = await full_search(message.text)
+    await message.answer(result)
+#"\n".join(out), reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "📄 PDF досьє")
 async def pdf_btn(message: Message):
@@ -761,18 +772,24 @@ async def pdf_btn(message: Message):
         await message.answer_document(FSInputFile(row["pdf_path"]), caption="PDF досьє")
         return
 
-    await message.answer("Немає PDF досьє.", reply_markup=menu(message.from_user.id))
+    result = await full_search(message.text)
+    await message.answer(result)
+#"Немає PDF досьє.", reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "💎 VIP / Тарифи")
 async def vip_btn(message: Message):
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>VIP / Тарифи</b>\n\nFREE\nINTEL\nAGENCY\nWARROOM",
         reply_markup=menu(message.from_user.id)
     )
 
 @dp.message(F.text == "🆘 Підтримка")
 async def support_btn(message: Message):
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "Підтримка активна. Надішли проблему одним повідомленням.",
         reply_markup=menu(message.from_user.id)
     )
@@ -782,7 +799,9 @@ async def support_btn(message: Message):
 async def admin_btn(message: Message):
     if message.from_user.id != OWNER_ID:
         return
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>Адмін-панель</b>\n\n"
         "Команди:\n"
         "• 📊 Статистика\n"
@@ -804,7 +823,9 @@ async def admin_stats_btn(message: Message):
     if message.from_user.id != OWNER_ID:
         return
     st = owner_stats()
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>Статистика</b>\n\n"
         f"Users: {st['users']}\n"
         f"Searches total: {st['searches']}\n"
@@ -822,13 +843,17 @@ async def admin_reset_limits_btn(message: Message):
     if message.from_user.id != OWNER_ID:
         return
     reset_all_daily_limits()
-    await message.answer("Ліміти скинуто.", reply_markup=menu(message.from_user.id))
+    result = await full_search(message.text)
+    await message.answer(result)
+#"Ліміти скинуто.", reply_markup=menu(message.from_user.id))
 
 @dp.message(F.text == "🧪 Health")
 async def admin_health_btn(message: Message):
     if message.from_user.id != OWNER_ID:
         return
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>Health</b>\n\n"
         f"Bot: online\n"
         f"DB: {esc(DB_PATH)}\n"
@@ -843,7 +868,9 @@ async def admin_secrets_btn(message: Message):
     if message.from_user.id != OWNER_ID:
         return
     st = secrets_status()
-    await message.answer(
+    result = await full_search(message.text)
+    await message.answer(result)
+#
         "<b>Secrets status</b>\n\n"
         f"BOT_TOKEN: {'set' if st['BOT_TOKEN'] else 'missing'}\n"
         f"OWNER_ID: {'set' if st['OWNER_ID'] else 'missing'}\n"
@@ -859,7 +886,9 @@ async def universal_handler(message: Message):
         return
 
     if text.startswith("/") and text not in ["/start", "/profile"]:
-        await message.answer("Невідома команда.", reply_markup=menu(message.from_user.id))
+        result = await full_search(message.text)
+    await message.answer(result)
+#"Невідома команда.", reply_markup=menu(message.from_user.id))
         return
 
     if text in {"🔎 Новий пошук", "📁 Мої результати", "📄 PDF досьє", "👤 Профіль", "💎 VIP / Тарифи", "🆘 Підтримка"}:
@@ -869,10 +898,14 @@ async def universal_handler(message: Message):
 
     used = daily_used(message.from_user.id)
     if message.from_user.id != OWNER_ID and used >= FREE_DAILY_LIMIT:
-        await message.answer(f"Ліміт вичерпано: {used}/{FREE_DAILY_LIMIT}", reply_markup=menu(message.from_user.id))
+        result = await full_search(message.text)
+    await message.answer(result)
+#f"Ліміт вичерпано: {used}/{FREE_DAILY_LIMIT}", reply_markup=menu(message.from_user.id))
         return
 
-    wait = await message.answer("NEXARA: Глибокий пошук...", reply_markup=menu(message.from_user.id))
+    wait = result = await full_search(message.text)
+    await message.answer(result)
+#"NEXARA: Глибокий пошук...", reply_markup=menu(message.from_user.id))
     try:
         result = await full_osint(text)
         pdf_path = make_pdf(result)
