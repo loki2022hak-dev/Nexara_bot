@@ -12,14 +12,15 @@ RUN apt-get update && apt-get install -y \
     libxcb1-dev libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# основні залежності
-COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt /app/requirements.txt
 
-# окремо maigret (щоб не ламав aiohttp)
-RUN pip install --no-cache-dir maigret==0.4.4
+RUN python -m venv /opt/maigret-venv && \
+    /opt/maigret-venv/bin/pip install --upgrade pip setuptools wheel && \
+    /opt/maigret-venv/bin/pip install --no-cache-dir git+https://github.com/soxoj/maigret.git
 
-COPY . .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+COPY . /app
 
 CMD ["python", "bot.py"]
