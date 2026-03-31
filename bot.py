@@ -2,22 +2,26 @@ import os
 import re
 import json
 import html
-import shutil
 import sqlite3
 import asyncio
 import logging
 import ipaddress
 import subprocess
+import urllib.parse
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
 
 import aiohttp
+import phonenumbers
+from phonenumbers import geocoder, carrier, timezone, PhoneNumberType, number_type, is_possible_number, is_valid_number
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
@@ -25,12 +29,16 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN not set")
 
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "10"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "").strip()
+HIBP_API_KEY = os.getenv("HIBP_API_KEY", "").strip()
+
 DB_PATH = "nexara_bot.db"
 DOSSIER_DIR = Path("dossiers")
 DOSSIER_DIR.mkdir(exist_ok=True)
-
-FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "10"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -214,6 +222,13 @@ def detect_type(text: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", q):
         return "email"
 
+    try:
+        pn = phonenumbers.parse(q, None if q.startswith("+") else "UA")
+        if is_possible_number(pn):
+            return "phone"
+    except Exception:
+        pass
+
     if re.fullmatch(r"(?!-)(?:[a-zA-Z0-9-]{1,63}\.)+[A-Za-z]{2,63}", q):
         return "domain"
 
@@ -222,32 +237,69 @@ def detect_type(text: str) -> str:
 
     return "text"
 
-async def fetch_json(session, url, headers=None, timeout=15):
+async def fetch_json(session, url, headers=None, timeout=20):
     try:
         async with session.get(url, headers=headers or {}, timeout=timeout) as r:
             txt = await r.text()
             ct = r.headers.get("content-type", "")
             if "json" in ct:
-                return True, json.loads(txt)
-            return True, {"raw": txt[:3000], "status": r.status}
+                return True, json.loads(txt), r.status
+            return True, {"raw": txt[:4000]}, r.status
     except Exception as e:
-        return False, {"error": str(e)}
+        return False, {"error": str(e)}, 0
 
 async def dns_lookup(session, domain, rtype):
-    ok, data = await fetch_json(
+    ok, data, status = await fetch_json(
         session,
         f"https://cloudflare-dns.com/dns-query?name={domain}&type={rtype}",
         headers={"accept": "application/dns-json"}
     )
-    return {"ok": ok, "type": rtype, "data": data}
+    return {"ok": ok, "status": status, "type": rtype, "data": data}
 
 async def rdap_domain(session, domain):
-    ok, data = await fetch_json(session, f"https://rdap.org/domain/{domain}")
-    return {"ok": ok, "data": data}
+    ok, data, status = await fetch_json(session, f"https://rdap.org/domain/{domain}")
+    return {"ok": ok, "status": status, "data": data}
 
 async def rdap_ip(session, ip):
-    ok, data = await fetch_json(session, f"https://rdap.org/ip/{ip}")
-    return {"ok": ok, "data": data}
+    ok, data, status = await fetch_json(session, f"https://rdap.org/ip/{ip}")
+    return {"ok": ok, "status": status, "data": data}
+
+async def shodan_host(session, ip):
+    if not SHODAN_API_KEY:
+        return {"enabled": False, "ok": False, "error": "SHODAN_API_KEY not set"}
+    ok, data, status = await fetch_json(
+        session,
+        f"https://api.shodan.io/shodan/host/{ip}?key={urllib.parse.quote(SHODAN_API_KEY)}&minify=true"
+    )
+    return {"enabled": True, "ok": ok and status == 200, "status": status, "data": data}
+
+async def hibp_breached_account(session, email):
+    if not HIBP_API_KEY:
+        return {"enabled": False, "ok": False, "error": "HIBP_API_KEY not set"}
+    encoded = urllib.parse.quote(email.strip().lower(), safe="")
+    headers = {
+        "hibp-api-key": HIBP_API_KEY,
+        "user-agent": "NEXARA-OSINT/1.0"
+    }
+    ok, data, status = await fetch_json(
+        session,
+        f"https://haveibeenpwned.com/api/v3/breachedaccount/{encoded}",
+        headers=headers,
+        timeout=25
+    )
+    return {"enabled": True, "ok": ok and status in (200, 404), "status": status, "data": data}
+
+def extract_a_records(dns_block):
+    data = (dns_block or {}).get("data", {})
+    if not isinstance(data, dict):
+        return []
+    answers = data.get("Answer", []) or []
+    vals = []
+    for a in answers:
+        val = a.get("data")
+        if val:
+            vals.append(val)
+    return vals
 
 async def domain_osint(domain: str) -> dict:
     async with aiohttp.ClientSession() as session:
@@ -258,22 +310,30 @@ async def domain_osint(domain: str) -> dict:
             dns_lookup(session, domain, "TXT"),
             rdap_domain(session, domain),
         )
+        shodan_hits = []
+        for ip in extract_a_records(a)[:3]:
+            shodan_hits.append(await shodan_host(session, ip))
     return {
         "type": "domain",
         "query": domain,
         "generated_at": now_utc(),
         "dns": {"A": a, "MX": mx, "NS": ns, "TXT": txt},
         "rdap": rdap,
+        "shodan_hosts": shodan_hits,
     }
 
 async def ip_osint(ip: str) -> dict:
     async with aiohttp.ClientSession() as session:
-        rdap = await rdap_ip(session, ip)
+        rdap, shodan = await asyncio.gather(
+            rdap_ip(session, ip),
+            shodan_host(session, ip)
+        )
     return {
         "type": "ip",
         "query": ip,
         "generated_at": now_utc(),
         "rdap": rdap,
+        "shodan": shodan,
     }
 
 async def url_osint(url: str) -> dict:
@@ -295,6 +355,8 @@ async def url_osint(url: str) -> dict:
 
 async def email_osint(email: str) -> dict:
     local, _, domain = email.partition("@")
+    async with aiohttp.ClientSession() as session:
+        hibp = await hibp_breached_account(session, email)
     embedded = await domain_osint(domain) if domain else {}
     return {
         "type": "email",
@@ -302,13 +364,55 @@ async def email_osint(email: str) -> dict:
         "generated_at": now_utc(),
         "local_part": local,
         "domain_part": domain,
+        "hibp": hibp,
         "domain_lookup": embedded,
     }
+
+def phone_type_name(t):
+    mapping = {
+        PhoneNumberType.MOBILE: "mobile",
+        PhoneNumberType.FIXED_LINE: "fixed_line",
+        PhoneNumberType.FIXED_LINE_OR_MOBILE: "fixed_or_mobile",
+        PhoneNumberType.TOLL_FREE: "toll_free",
+        PhoneNumberType.PREMIUM_RATE: "premium_rate",
+        PhoneNumberType.SHARED_COST: "shared_cost",
+        PhoneNumberType.VOIP: "voip",
+        PhoneNumberType.PERSONAL_NUMBER: "personal_number",
+        PhoneNumberType.PAGER: "pager",
+        PhoneNumberType.UAN: "uan",
+        PhoneNumberType.VOICEMAIL: "voicemail",
+        PhoneNumberType.UNKNOWN: "unknown",
+    }
+    return mapping.get(t, str(t))
+
+async def phone_osint(phone_text: str) -> dict:
+    pn = phonenumbers.parse(phone_text, None if phone_text.startswith("+") else "UA")
+    e164 = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.E164)
+    international = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+    national = phonenumbers.format_number(pn, phonenumbers.PhoneNumberFormat.NATIONAL)
+
+    result = {
+        "type": "phone",
+        "query": phone_text,
+        "generated_at": now_utc(),
+        "e164": e164,
+        "international": international,
+        "national": national,
+        "valid": is_valid_number(pn),
+        "possible": is_possible_number(pn),
+        "region_code": phonenumbers.region_code_for_number(pn),
+        "country_code": pn.country_code,
+        "location": geocoder.description_for_number(pn, "en"),
+        "carrier": carrier.name_for_number(pn, "en"),
+        "timezones": list(timezone.time_zones_for_number(pn)),
+        "number_type": phone_type_name(number_type(pn)),
+    }
+    return result
 
 def which_bin(name: str):
     return shutil.which(name)
 
-def run_cmd(args, timeout=60):
+def run_cmd(args, timeout=45):
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         return {
@@ -332,33 +436,6 @@ def parse_sherlock_output(stdout: str):
             found.append(line)
     return found
 
-def parse_maigret_output(stdout: str):
-    found = []
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("[+] "):
-            found.append(line[4:].strip())
-        elif line.startswith("http://") or line.startswith("https://"):
-            found.append(line)
-        elif "http" in line and ("found" in line.lower() or "available" in line.lower()):
-            found.append(line[:300])
-    return found
-
-async def run_maigret(target: str) -> dict:
-    binpath = which_bin("maigret")
-    if not binpath:
-        return {"installed": False, "ok": False, "parsed": [], "stderr": "maigret not installed"}
-    result = await asyncio.to_thread(
-        run_cmd,
-        [binpath, target, "--timeout", "8", "--top-sites", "20", "--no-color"],
-        45
-    )
-    result["installed"] = True
-    result["parsed"] = parse_maigret_output(result.get("stdout", ""))
-    return result
-
 async def run_sherlock(target: str) -> dict:
     binpath = which_bin("sherlock")
     if not binpath:
@@ -374,13 +451,11 @@ async def run_sherlock(target: str) -> dict:
 
 async def username_osint(username: str) -> dict:
     username = username.lstrip("@")
-    maigret_result = await run_maigret(username)
     sherlock_result = await run_sherlock(username)
     return {
         "type": "username",
         "query": username,
         "generated_at": now_utc(),
-        "maigret": maigret_result,
         "sherlock": sherlock_result,
     }
 
@@ -389,15 +464,12 @@ def build_summary(result: dict) -> list[str]:
     lines = []
 
     if t == "username":
-        m = result.get("maigret", {})
         s = result.get("sherlock", {})
-        lines.append(f"Maigret: {'installed' if m.get('installed') else 'missing'}")
         lines.append(f"Sherlock: {'installed' if s.get('installed') else 'missing'}")
-        lines.append(f"Maigret hits: {len(m.get('parsed', []))}")
         lines.append(f"Sherlock hits: {len(s.get('parsed', []))}")
-        if m.get("timeout") or s.get("timeout"):
-            lines.append("Один із модулів пішов у timeout")
-        if not m.get("parsed") and not s.get("parsed"):
+        if s.get("timeout"):
+            lines.append("Sherlock timeout")
+        if not s.get("parsed"):
             lines.append("Хітів не знайдено")
 
     elif t == "domain":
@@ -406,12 +478,18 @@ def build_summary(result: dict) -> list[str]:
             block = dns.get(rtype, {})
             answers = (block.get("data") or {}).get("Answer", []) if isinstance(block.get("data"), dict) else []
             lines.append(f"{rtype}: {len(answers)} records")
+        sh = result.get("shodan_hosts", [])
+        if sh:
+            lines.append(f"Shodan host checks: {len(sh)}")
 
     elif t == "ip":
         rdap = result.get("rdap", {}).get("data", {})
         if isinstance(rdap, dict):
             lines.append(f"Owner: {rdap.get('name', 'unknown')}")
             lines.append(f"Handle: {rdap.get('handle', 'unknown')}")
+        sh = result.get("shodan", {})
+        if sh.get("enabled"):
+            lines.append(f"Shodan status: {sh.get('status')}")
 
     elif t == "url":
         parsed = result.get("parsed", {})
@@ -422,6 +500,16 @@ def build_summary(result: dict) -> list[str]:
     elif t == "email":
         lines.append(f"Local-part: {result.get('local_part')}")
         lines.append(f"Domain-part: {result.get('domain_part')}")
+        hibp = result.get("hibp", {})
+        if hibp.get("enabled"):
+            lines.append(f"HIBP status: {hibp.get('status')}")
+
+    elif t == "phone":
+        lines.append(f"E164: {result.get('e164')}")
+        lines.append(f"Region: {result.get('region_code')}")
+        lines.append(f"Carrier: {result.get('carrier') or 'unknown'}")
+        lines.append(f"Type: {result.get('number_type')}")
+        lines.append(f"Valid: {result.get('valid')}")
 
     else:
         lines.append("Структурований OSINT для цього тексту не визначено")
@@ -445,32 +533,55 @@ def render_result(result: dict) -> str:
         parts.append(f"• {esc(line)}")
 
     if t == "username":
-        m = result.get("maigret", {})
         s = result.get("sherlock", {})
-
-        if m.get("parsed"):
-            parts.append("")
-            parts.append("<b>Maigret:</b>")
-            for x in m["parsed"][:12]:
-                parts.append(f"• {esc(x)}")
-
         if s.get("parsed"):
             parts.append("")
             parts.append("<b>Sherlock:</b>")
-            for x in s["parsed"][:12]:
+            for x in s["parsed"][:15]:
                 parts.append(f"• {esc(x)}")
+        elif s.get("stderr"):
+            parts.append("")
+            parts.append("<b>Технічні деталі:</b>")
+            parts.append(f"• {esc(s['stderr'][:600])}")
 
-        if not m.get("parsed") and not s.get("parsed"):
-            raw = []
-            if m.get("stderr"):
-                raw.append("Maigret stderr: " + m["stderr"][:400])
-            if s.get("stderr"):
-                raw.append("Sherlock stderr: " + s["stderr"][:400])
-            if raw:
-                parts.append("")
-                parts.append("<b>Технічні деталі:</b>")
-                for x in raw:
-                    parts.append(f"• {esc(x)}")
+    elif t == "ip":
+        sh = result.get("shodan", {})
+        data = sh.get("data", {}) if isinstance(sh, dict) else {}
+        if isinstance(data, dict) and data:
+            parts.append("")
+            parts.append("<b>Shodan:</b>")
+            for key in ["ip_str", "org", "isp", "os"]:
+                if data.get(key):
+                    parts.append(f"• {esc(key)}: {esc(data.get(key))}")
+            ports = data.get("ports", [])
+            if ports:
+                parts.append(f"• ports: {esc(', '.join(map(str, ports[:20])))}")
+
+    elif t == "email":
+        hibp = result.get("hibp", {})
+        data = hibp.get("data", [])
+        if isinstance(data, list) and data:
+            parts.append("")
+            parts.append("<b>Email leaks / breaches:</b>")
+            for item in data[:15]:
+                name = item.get("Name") or item.get("Title") or "unknown"
+                domain = item.get("Domain") or "n/a"
+                breach_date = item.get("BreachDate") or "n/a"
+                parts.append(f"• {esc(name)} | {esc(domain)} | {esc(breach_date)}")
+        elif hibp.get("enabled") and hibp.get("status") == 404:
+            parts.append("")
+            parts.append("• HIBP: no breaches found")
+
+    elif t == "phone":
+        parts.append("")
+        parts.append("<b>Phone OSINT:</b>")
+        for key in ["international", "national", "location", "carrier", "number_type"]:
+            val = result.get(key)
+            if val:
+                parts.append(f"• {esc(key)}: {esc(val)}")
+        tz = result.get("timezones") or []
+        if tz:
+            parts.append(f"• timezones: {esc(', '.join(tz))}")
 
     return "\n".join(parts)
 
@@ -504,13 +615,17 @@ def make_pdf(result: dict) -> str:
 
     if result.get("type") == "username":
         line("")
-        line("Maigret results:")
-        for x in result.get("maigret", {}).get("parsed", [])[:20]:
-            line(f"- {x}", 13)
-        line("")
         line("Sherlock results:")
-        for x in result.get("sherlock", {}).get("parsed", [])[:20]:
+        for x in result.get("sherlock", {}).get("parsed", [])[:25]:
             line(f"- {x}", 13)
+
+    if result.get("type") == "email":
+        line("")
+        line("Email leaks:")
+        hibp = result.get("hibp", {}).get("data", [])
+        if isinstance(hibp, list):
+            for item in hibp[:25]:
+                line(f"- {(item.get('Name') or 'unknown')} | {(item.get('Domain') or 'n/a')}", 13)
 
     c.save()
     return str(pdf_path)
@@ -527,6 +642,8 @@ async def full_osint(query: str) -> dict:
         return await url_osint(query)
     if qtype == "email":
         return await email_osint(query.lower())
+    if qtype == "phone":
+        return await phone_osint(query)
     return {
         "type": "text",
         "query": query,
@@ -538,10 +655,11 @@ async def full_osint(query: str) -> dict:
 async def start_cmd(message: Message):
     upsert_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     WAITING_FOR_QUERY[message.from_user.id] = True
+    used = "∞" if message.from_user.id == OWNER_ID else str(daily_used(message.from_user.id))
     await message.answer(
         "<b>NEXARA</b>\n"
-        "Використано: 0\n\n"
-        "Введіть ПІБ, Нікнейм або IP:",
+        f"Використано: {used}\n\n"
+        "Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:",
         reply_markup=menu()
     )
 
@@ -549,11 +667,12 @@ async def start_cmd(message: Message):
 async def profile_cmd(message: Message):
     used = daily_used(message.from_user.id)
     total = total_searches(message.from_user.id)
+    used_str = "∞" if message.from_user.id == OWNER_ID else f"{used}/{FREE_DAILY_LIMIT}"
     await message.answer(
         f"<b>Профіль</b>\n\n"
         f"<b>ID:</b> <code>{message.from_user.id}</code>\n"
         f"<b>Username:</b> @{esc(message.from_user.username or 'none')}\n"
-        f"<b>Використано сьогодні:</b> {used}/{FREE_DAILY_LIMIT}\n"
+        f"<b>Використано сьогодні:</b> {used_str}\n"
         f"<b>Всього пошуків:</b> {total}",
         reply_markup=menu()
     )
@@ -565,7 +684,7 @@ async def profile_btn(message: Message):
 @dp.message(F.text == "🔎 Новий пошук")
 async def new_search_btn(message: Message):
     WAITING_FOR_QUERY[message.from_user.id] = True
-    await message.answer("Введіть ПІБ, Нікнейм або IP:", reply_markup=menu())
+    await message.answer("Введіть ПІБ, Нікнейм, Email, Телефон, Domain, URL або IP:", reply_markup=menu())
 
 @dp.message(F.text == "📁 Мої результати")
 async def results_btn(message: Message):
@@ -622,7 +741,7 @@ async def universal_handler(message: Message):
     upsert_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
 
     used = daily_used(message.from_user.id)
-    if used >= FREE_DAILY_LIMIT:
+    if message.from_user.id != OWNER_ID and used >= FREE_DAILY_LIMIT:
         await message.answer(f"Ліміт вичерпано: {used}/{FREE_DAILY_LIMIT}", reply_markup=menu())
         return
 
@@ -632,7 +751,8 @@ async def universal_handler(message: Message):
         pdf_path = make_pdf(result)
         LAST_PDF[message.from_user.id] = pdf_path
         save_search(message.from_user.id, text, result.get("type", "text"), result, pdf_path)
-        bump_daily(message.from_user.id)
+        if message.from_user.id != OWNER_ID:
+            bump_daily(message.from_user.id)
 
         await wait.edit_text(render_result(result), reply_markup=menu())
 
