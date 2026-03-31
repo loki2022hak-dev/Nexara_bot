@@ -12,9 +12,13 @@ RUN apt-get update && apt-get install -y \
     libxcb1-dev libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# основні залежності
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
+
+# окремо maigret (щоб не ламав aiohttp)
+RUN pip install --no-cache-dir maigret==0.4.4
 
 COPY . .
 
